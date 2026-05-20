@@ -48,8 +48,8 @@ module.exports = async function handler(req, res) {
     let updated = 0;
     let errors = 0;
 
-    for (let i = 1; i < rows.length; i++) {
-      const row = rows[i];
+for (let i = 1; i < Math.min(rows.length, 6); i++) {
+          const row = rows[i];
       const rowNumber = i + 1;
 
       const recebidoAtual = row[15] || ""; // P
