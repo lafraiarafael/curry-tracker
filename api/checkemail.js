@@ -1,7 +1,7 @@
 const { google } = require("googleapis");
 
 const SHEET_NAME = "Festival_Polenta2026";
-const MAX_ROWS_PER_RUN = 20;
+const MAX_ROWS_PER_RUN = 50;
 
 async function getSheetsClient() {
   const auth = new google.auth.JWT({
