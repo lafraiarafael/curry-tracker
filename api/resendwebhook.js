@@ -1,6 +1,11 @@
 const { google } = require("googleapis");
 
-const SHEET_NAME = "Festival_Polenta2026";
+const CAMPAIGN_SHEETS = String(
+  process.env.CAMPAIGN_SHEETS || ""
+)
+  .split(",")
+  .map((name) => name.trim())
+  .filter(Boolean);
 
 async function getSheetsClient() {
   const auth = new google.auth.JWT({
@@ -12,58 +17,75 @@ async function getSheetsClient() {
   return google.sheets({ version: "v4", auth });
 }
 
-function findMessageRow(rows, emailId) {
-  for (let i = 1; i < rows.length; i++) {
-    const messageId = rows[i][18]; // Coluna S
+async function findMessageRow(sheets, emailId) {
+  for (const sheetName of CAMPAIGN_SHEETS) {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.SPREADSHEET_ID,
+      range: `'${sheetName}'!A1:V`,
+    });
 
-    if (messageId === emailId) {
-      return i + 1;
+    const rows = response.data.values || [];
+
+    for (let i = 1; i < rows.length; i++) {
+      const messageId = rows[i][18]; // coluna S
+
+      if (messageId === emailId) {
+        return {
+          sheetName,
+          rowNumber: i + 1,
+          rows,
+        };
+      }
     }
   }
 
   return null;
 }
 
+function normalizeText(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
 function calculateLeadScore(recebido, aberto, clicou, clicouWhats) {
   let score = 0;
 
-  if (String(recebido || "").toLowerCase() === "sim") {
-    score += 1;
-  }
-
-  if (String(aberto || "").toLowerCase() === "sim") {
-    score += 2;
-  }
-
-  if (String(clicou || "").toLowerCase() === "sim") {
-    score += 5;
-  }
-
-  if (String(clicouWhats || "").toLowerCase() === "sim") {
-    score += 10;
-  }
+  if (normalizeText(recebido) === "sim") score += 1;
+  if (normalizeText(aberto) === "sim") score += 2;
+  if (normalizeText(clicou) === "sim") score += 5;
+  if (normalizeText(clicouWhats) === "sim") score += 10;
 
   return score;
 }
 
+function getSegment(score) {
+  const value = Number(score || 0);
+
+  if (value >= 15) return "Premium";
+  if (value >= 8) return "Quente";
+  if (value >= 3) return "Morno";
+
+  return "Frio";
+}
+
 async function updateStatusByEvent(
   sheets,
+  sheetName,
   rowNumber,
   eventType,
   rows
 ) {
   const updates = [];
 
-  let recebido = rows[rowNumber - 1][15] || ""; // P
-  let aberto = rows[rowNumber - 1][16] || ""; // Q
-  let clicou = rows[rowNumber - 1][17] || ""; // R
-  let clicouWhats = rows[rowNumber - 1][19] || ""; // T
+  let recebido = rows[rowNumber - 1][15] || ""; // P Recebido
+  let aberto = rows[rowNumber - 1][16] || ""; // Q Aberto
+  let clicou = rows[rowNumber - 1][17] || ""; // R Clicou
+  let clicouWhats = rows[rowNumber - 1][19] || ""; // T Clicou_whats
 
   if (eventType === "email.delivered") {
     recebido = "Sim";
 
     updates.push({
-      range: `'${SHEET_NAME}'!P${rowNumber}`,
+      range: `'${sheetName}'!P${rowNumber}`,
       values: [["Sim"]],
     });
   }
@@ -73,12 +95,12 @@ async function updateStatusByEvent(
     aberto = "Sim";
 
     updates.push({
-      range: `'${SHEET_NAME}'!P${rowNumber}`,
+      range: `'${sheetName}'!P${rowNumber}`,
       values: [["Sim"]],
     });
 
     updates.push({
-      range: `'${SHEET_NAME}'!Q${rowNumber}`,
+      range: `'${sheetName}'!Q${rowNumber}`,
       values: [["Sim"]],
     });
   }
@@ -89,43 +111,41 @@ async function updateStatusByEvent(
     clicou = "Sim";
 
     updates.push({
-      range: `'${SHEET_NAME}'!P${rowNumber}`,
+      range: `'${sheetName}'!P${rowNumber}`,
       values: [["Sim"]],
     });
 
     updates.push({
-      range: `'${SHEET_NAME}'!Q${rowNumber}`,
+      range: `'${sheetName}'!Q${rowNumber}`,
       values: [["Sim"]],
     });
 
     updates.push({
-      range: `'${SHEET_NAME}'!R${rowNumber}`,
+      range: `'${sheetName}'!R${rowNumber}`,
       values: [["Sim"]],
     });
   }
 
-  if (
-    eventType === "email.bounced" ||
-    eventType === "email.failed"
-  ) {
+  if (eventType === "email.bounced" || eventType === "email.failed") {
     recebido = "Não";
 
     updates.push({
-      range: `'${SHEET_NAME}'!P${rowNumber}`,
+      range: `'${sheetName}'!P${rowNumber}`,
       values: [["Não"]],
     });
   }
 
-  const leadScore = calculateLeadScore(
-    recebido,
-    aberto,
-    clicou,
-    clicouWhats
-  );
+  const leadScore = calculateLeadScore(recebido, aberto, clicou, clicouWhats);
+  const segment = getSegment(leadScore);
 
   updates.push({
-    range: `'${SHEET_NAME}'!U${rowNumber}`,
+    range: `'${sheetName}'!U${rowNumber}`,
     values: [[leadScore]],
+  });
+
+  updates.push({
+    range: `'${sheetName}'!V${rowNumber}`,
+    values: [[segment]],
   });
 
   if (updates.length === 0) return;
@@ -142,16 +162,13 @@ async function updateStatusByEvent(
 module.exports = async function handler(req, res) {
   try {
     if (req.method !== "POST") {
-      return res
-        .status(200)
-        .json({
-          ok: true,
-          message: "Resend webhook online",
-        });
+      return res.status(200).json({
+        ok: true,
+        message: "Resend webhook online",
+      });
     }
 
     const event = req.body;
-
     const eventType = event?.type;
     const emailId = event?.data?.email_id;
 
@@ -164,14 +181,18 @@ module.exports = async function handler(req, res) {
 
     const sheets = await getSheetsClient();
 
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: process.env.SPREADSHEET_ID,
-      range: `'${SHEET_NAME}'!A1:U`,
-    });
+const found = await findMessageRow(sheets, emailId);
 
-    const rows = response.data.values || [];
+if (!found) {
+  return res.status(200).json({
+    ok: true,
+    message: "Message_ID não encontrado",
+    emailId,
+    eventType,
+  });
+}
 
-    const rowNumber = findMessageRow(rows, emailId);
+const { sheetName, rowNumber, rows } = found;
 
     if (!rowNumber) {
       return res.status(200).json({
@@ -182,12 +203,13 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    await updateStatusByEvent(
-      sheets,
-      rowNumber,
-      eventType,
-      rows
-    );
+await updateStatusByEvent(
+  sheets,
+  sheetName,
+  rowNumber,
+  eventType,
+  rows
+);
 
     return res.status(200).json({
       ok: true,
