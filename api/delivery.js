@@ -65,10 +65,18 @@ async function registerClick({ campaign, phone }) {
   return false;
 }
 
-export default function handler(req, res) {
-  return res.status(200).json({
-    ok: true,
-    route: "delivery",
-    message: "API delivery funcionando"
-  });
-}
+module.exports = async function handler(req, res) {
+  try {
+    const phone = formatPhone(req.query.id);
+    const campaign = String(req.query.camp || "Delivery_proprio").trim();
+
+    if (phone && campaign) {
+      await registerClick({ campaign, phone });
+    }
+
+    return res.redirect(302, MENU_DINO_URL);
+  } catch (error) {
+    console.error("Erro tracker:", error.message);
+    return res.redirect(302, MENU_DINO_URL);
+  }
+};
