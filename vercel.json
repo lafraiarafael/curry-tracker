@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/check-email-status",
+      "schedule": "0 */12 * * *"
+    }
+  ]
+}
