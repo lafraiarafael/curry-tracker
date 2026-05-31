@@ -30,6 +30,31 @@ async function getSheetsClient() {
   return google.sheets({ version: "v4", auth });
 }
 
+function normalizeText(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function calculateLeadScore(recebido, aberto, clicou, clicouWhats) {
+  let score = 0;
+
+  if (normalizeText(recebido) === "sim") score += 1;
+  if (normalizeText(aberto) === "sim") score += 2;
+  if (normalizeText(clicou) === "sim") score += 5;
+  if (normalizeText(clicouWhats) === "sim") score += 10;
+
+  return score;
+}
+
+function getSegment(score) {
+  const value = Number(score || 0);
+
+  if (value >= 15) return "Premium";
+  if (value >= 8) return "Quente";
+  if (value >= 3) return "Morno";
+
+  return "Frio";
+}
+
 async function registerClick({ campaign, phone }) {
   const sheets = await getSheetsClient();
 
@@ -46,13 +71,31 @@ async function registerClick({ campaign, phone }) {
 
     if (rowPhone === phone) {
       const rowNumber = i + 1;
+      const recebido = row[15] || "";
+      const aberto = row[16] || "";
+      const clicou = row[17] || "";
+      const clicouWhats = "Sim";
+      const leadScore = calculateLeadScore(recebido, aberto, clicou, clicouWhats);
+      const segment = getSegment(leadScore);
 
-      await sheets.spreadsheets.values.update({
+      await sheets.spreadsheets.values.batchUpdate({
         spreadsheetId: process.env.SPREADSHEET_ID,
-        range: `'${campaign}'!T${rowNumber}`,
-        valueInputOption: "USER_ENTERED",
         requestBody: {
-          values: [["Sim"]],
+          valueInputOption: "USER_ENTERED",
+          data: [
+            {
+              range: `'${campaign}'!T${rowNumber}`,
+              values: [["Sim"]],
+            },
+            {
+              range: `'${campaign}'!U${rowNumber}`,
+              values: [[leadScore]],
+            },
+            {
+              range: `'${campaign}'!V${rowNumber}`,
+              values: [[segment]],
+            },
+          ],
         },
       });
 
